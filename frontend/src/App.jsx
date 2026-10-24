@@ -171,6 +171,8 @@ function List({ items, onOpen, showUser }) {
     </div>
   );
 }
+const CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD;
+const PRESET = import.meta.env.VITE_CLOUDINARY_PRESET;
 
 function UserView({ token, user }) {
   const empty = { title: "", description: "", category: "", location: "", image_url: "" };
@@ -179,6 +181,7 @@ function UserView({ token, user }) {
   const [f, setF] = useState(empty);
   const [msg, setMsg] = useState("");
   const [open, setOpen] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const load = () => api("/complaints", "GET", null, token).then(setList);
   useEffect(() => { api("/categories").then(setCats); load(); }, []);
 
@@ -193,7 +196,25 @@ function UserView({ token, user }) {
       load();
     } catch (x) { setMsg(x.message); }
   };
-
+const upload = async (file) => {
+  if (!file) return;
+  setUploading(true);
+  setMsg("");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("upload_preset", PRESET);
+    const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD}/image/upload`,
+      { method: "POST", body: fd });
+    const d = await r.json();
+    if (!d.secure_url) throw new Error(d.error?.message || "Upload failed");
+    setF((prev) => ({ ...prev, image_url: d.secure_url }));
+  } catch (e) {
+    setMsg(e.message);
+  } finally {
+    setUploading(false);
+  }
+};
   return (
     <>
       <form onSubmit={submit} className="card">
@@ -208,10 +229,11 @@ function UserView({ token, user }) {
         </select>
         <input placeholder="Location (block / room)" value={f.location}
           onChange={(e) => setF({ ...f, location: e.target.value })} />
-        <input placeholder="Image URL (optional)" value={f.image_url}
-          onChange={(e) => setF({ ...f, image_url: e.target.value })} />
+        <input type="file" accept="image/*" onChange={(e) => upload(e.target.files[0])} />
+        {uploading && <div className="muted">Uploading...</div>}
+        {f.image_url && <img src={f.image_url} alt="preview" className="img" />}
         {msg && <div className="ok">{msg}</div>}
-        <button>Submit complaint</button>
+        <button disabled={uploading}>Submit complaint</button>
       </form>
       <h2>My complaints</h2>
       <List items={list} onOpen={setOpen} />
