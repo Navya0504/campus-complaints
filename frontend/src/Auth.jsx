@@ -59,16 +59,62 @@ function GoogleButton({ onCredential }) {
   );
 }
 
+const IS_APP = () => typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+
+// Google sign-in inside the Android app: Google's own account picker, no browser needed.
+function NativeGoogleButton({ onCredential, onError }) {
+  const [busy, setBusy] = useState(false);
+  const click = async () => {
+    setBusy(true);
+    try {
+      const cfg = await api("/config");
+      if (!cfg.google_client_id) throw new Error("Google sign-in is not configured on the server.");
+      const { SocialLogin } = await import("@capgo/capacitor-social-login");
+      await SocialLogin.initialize({ google: { webClientId: cfg.google_client_id } });
+      const { result } = await SocialLogin.login({ provider: "google", options: {} });
+      if (!result?.idToken) throw new Error("Google did not return a sign-in token. Please try again.");
+      await onCredential(result.idToken);
+    } catch (x) {
+      const m = String(x?.message || x || "");
+      if (/cancel/i.test(m)) return;
+      onError(/28444|developer console|not set up/i.test(m)
+        ? "Google sign-in is not set up for this app build yet (Android client / SHA-1 mismatch)."
+        : m || "Google sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="btn ghost block gnative" onClick={click} disabled={busy}>
+      <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+        <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/>
+        <path fill="#FBBC05" d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"/>
+        <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/>
+      </svg>
+      {busy ? "Opening Google..." : "Continue with Google"}
+    </button>
+  );
+}
+
 export default function AuthScreen({ onAuth }) {
+  const isApp = IS_APP();
   const [tab, setTab] = useState("user"); // user | staff
   const [mode, setMode] = useState("login"); // login | register (students only)
   const [f, setF] = useState({ name: "", email: "", password: "" });
   const [depts, setDepts] = useState([]);
+  const [deptState, setDeptState] = useState("loading"); // loading | ready | error
   const [dept, setDept] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { api("/public/departments").then(setDepts).catch(() => {}); }, []);
+  const loadDepts = () => {
+    setDeptState("loading");
+    api("/public/departments")
+      .then((d) => { setDepts(d); setDeptState(d.length ? "ready" : "error"); })
+      .catch(() => setDeptState("error"));
+  };
+  useEffect(() => { loadDepts(); }, []);
 
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const deptName = (id) => depts.find((d) => String(d.id) === String(id))?.name;
@@ -165,10 +211,21 @@ export default function AuthScreen({ onAuth }) {
                 {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value="admin">Super Admin (all departments)</option>
               </select>
+              {deptState === "loading" && (
+                <span className="hint">Loading departments... the server may be waking up, this can take up to a minute.</span>
+              )}
+              {deptState === "error" && (
+                <div className="alert err">
+                  Could not load the departments. The server may still be starting, or it has not been updated yet.{" "}
+                  <a onClick={loadDepts}>Try again</a>
+                </div>
+              )}
             </div>
           )}
 
-          <GoogleButton onCredential={google} />
+          {isApp
+            ? <NativeGoogleButton onCredential={google} onError={setErr} />
+            : <GoogleButton onCredential={google} />}
           <div className="or"><span>or use email</span></div>
 
           <form onSubmit={submit} className="form">
@@ -204,8 +261,7 @@ export default function AuthScreen({ onAuth }) {
           )}
           {tab === "staff" && (
             <p className="hint center">
-              The Super Admin adds you to your department and gives you a password. You can sign in with that password, or with
-              Google using the same email. Forgot it? Ask the Super Admin to reset it.
+              The Super Admin adds you to your department and gives you a password. You can sign in with that password, or with Google using the same email. Forgot it? Ask the Super Admin to reset it.
             </p>
           )}
         </div>

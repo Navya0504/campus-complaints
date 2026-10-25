@@ -334,4 +334,5 @@ tr.dim .t { font-weight: 500; }
 @media (max-width: 860px) {
   .seg.inline { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .page-head .seg.inline { margin-top: 4px; }
+  .btn.gnative { display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; }
 }

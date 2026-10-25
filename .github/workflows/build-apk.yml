@@ -30,13 +30,21 @@ jobs:
       - name: Install packages
         run: npm ci
 
+      - name: Use the fixed signing key (keeps Google login working on every build)
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p ~/.android
+          cp android-signing/debug.keystore ~/.android/debug.keystore
+
       - name: Build the web app
         env:
           # EDIT THESE THREE VALUES (no trailing slash on the URL)
           VITE_API_URL: https://campus-complaints-8ilo.onrender.com/
           VITE_CLOUDINARY_CLOUD: zpnvw03d
           VITE_CLOUDINARY_PRESET: complaints
-        run: npm run build
+        run: |
+          case "$VITE_API_URL" in *YOUR-RENDER-URL*|*your-render-url*) echo "STOP: VITE_API_URL still has the placeholder. Put your real Render address."; exit 1;; esac
+          npm run build
 
       - name: Create the Android project
         run: npx cap add android
