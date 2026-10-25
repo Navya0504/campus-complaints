@@ -1,0 +1,477 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api";
+import {
+  Icon, StatusBadge, PriorityBadge, Stat, Empty, BarList, fmt, fmtDate, STATUSES, PRIORITIES,
+} from "./ui";
+
+const CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD;
+const PRESET = import.meta.env.VITE_CLOUDINARY_PRESET;
+
+/* ---------- shared table ---------- */
+export function ComplaintTable({ items, onOpen, showUser, showDept = true }) {
+  if (!items.length) return <Empty title="No complaints found" text="Nothing matches right now." />;
+  return (
+    <div className="card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Ticket</th><th>Issue</th><th>Category</th>
+            {showDept && <th>Department</th>}
+            <th>Priority</th><th>Status</th><th>Raised</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((c) => (
+            <tr key={c.id} className="click" onClick={() => onOpen(c.id)}>
+              <td data-label="Ticket"><b>{c.ticket_id}</b></td>
+              <td data-label="Issue" className="issue">
+                <div className="t">{c.title}</div>
+                {showUser && <div className="muted sm">by {c.submitted_by}</div>}
+              </td>
+              <td data-label="Category">{c.category}</td>
+              {showDept && <td data-label="Department">{c.department}</td>}
+              <td data-label="Priority"><PriorityBadge p={c.priority} /></td>
+              <td data-label="Status">
+                <div className="row-flex end">
+                  <StatusBadge s={c.status} />
+                  {c.is_overdue && <span className="pill overdue">Overdue</span>}
+                </div>
+              </td>
+              <td data-label="Raised" className="muted">{fmtDate(c.created_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MiniList({ items, onOpen }) {
+  return (
+    <div className="mini">
+      {items.map((c) => (
+        <div className="mini-row" key={c.id} onClick={() => onOpen(c.id)}>
+          <div>
+            <b>{c.ticket_id}</b> · {c.title}
+            <div className="muted sm">{c.category} · {c.department} · due {fmtDate(c.due_at)}</div>
+          </div>
+          <div className="row-flex end">
+            <StatusBadge s={c.status} />
+            {c.is_overdue && <span className="pill overdue">Overdue</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- complaints list with filters (all roles) ---------- */
+export function ComplaintsPage({ token, role, departments, onOpen, tick, title, subtitle }) {
+  const [items, setItems] = useState(null);
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+  const [tab, setTab] = useState("All");
+  const [category, setCategory] = useState("");
+  const [priority, setPriority] = useState("");
+  const [dept, setDept] = useState("");
+
+  useEffect(() => {
+    api("/complaints", "GET", null, token).then(setItems).catch((e) => setErr(e.message));
+  }, [tick]);
+
+  const all = items || [];
+  const cats = useMemo(() => [...new Set(all.map((c) => c.category))].sort(), [items]);
+  const count = (t) =>
+    t === "All" ? all.length : t === "Overdue" ? all.filter((c) => c.is_overdue).length
+      : all.filter((c) => c.status === t).length;
+
+  const shown = all.filter((c) => {
+    if (tab === "Overdue" ? !c.is_overdue : tab !== "All" && c.status !== tab) return false;
+    if (category && c.category !== category) return false;
+    if (priority && c.priority !== priority) return false;
+    if (dept && String(c.department_id) !== dept) return false;
+    if (q) {
+      const hay = `${c.ticket_id} ${c.title} ${c.description} ${c.location} ${c.submitted_by}`.toLowerCase();
+      if (!hay.includes(q.toLowerCase())) return false;
+    }
+    return true;
+  });
+
+  return (
+    <>
+      <div className="page-head"><div><h1>{title}</h1><p className="sub">{subtitle}</p></div></div>
+      <div className="tabs">
+        {["All", ...STATUSES, "Overdue"].map((t) => (
+          <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+            {t} <span>{count(t)}</span>
+          </button>
+        ))}
+      </div>
+      <div className="toolbar">
+        <div className="search">
+          <Icon name="search" size={16} />
+          <input placeholder="Search ticket, title, location..." value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">All categories</option>
+          {cats.map((c) => <option key={c}>{c}</option>)}
+        </select>
+        <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+          <option value="">All priorities</option>
+          {PRIORITIES.map((p) => <option key={p}>{p}</option>)}
+        </select>
+        {role === "admin" && (
+          <select value={dept} onChange={(e) => setDept(e.target.value)}>
+            <option value="">All departments</option>
+            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        )}
+      </div>
+      {err && <div className="alert err">{err}</div>}
+      {items === null && !err ? <p className="muted">Loading...</p>
+        : <ComplaintTable items={shown} onOpen={onOpen} showUser={role !== "user"} showDept={role !== "staff"} />}
+    </>
+  );
+}
+
+/* ---------- student / staff member ---------- */
+export function UserOverview({ auth, tick, go, onOpen, openAccount }) {
+  const [items, setItems] = useState(null);
+  useEffect(() => { api("/complaints", "GET", null, auth.token).then(setItems).catch(() => setItems([])); }, [tick]);
+  const all = items || [];
+  const open = all.filter((c) => c.status === "Submitted" || c.status === "In Progress").length;
+  const first = auth.user.name.split(" ")[0];
+
+  return (
+    <>
+      <div className="page-head">
+        <div><h1>Hello, {first}</h1><p className="sub">Here is where your complaints stand.</p></div>
+        <button className="btn" onClick={() => go("new")}><Icon name="plus" size={16} /> New complaint</button>
+      </div>
+
+      {!auth.user.has_password && (
+        <div className="banner">
+          <div><b>Add a password</b><div className="sm">You signed in with Google. Set a password to also sign in with your email.</div></div>
+          <button className="btn sm" onClick={openAccount}><Icon name="key" size={14} /> Set password</button>
+        </div>
+      )}
+
+      <div className="grid stats">
+        <Stat icon="doc" label="Total complaints" value={all.length} />
+        <Stat icon="clock" tone="amber" label="Open" value={open} />
+        <Stat icon="check" tone="green" label="Resolved" value={all.filter((c) => c.status === "Resolved").length} />
+        <Stat icon="alert" tone="red" label="Rejected" value={all.filter((c) => c.status === "Rejected").length} />
+      </div>
+
+      <div className="section-head"><h2>Recent complaints</h2>
+        {all.length > 0 && <a onClick={() => go("mine")}>View all</a>}</div>
+      {items === null ? <p className="muted">Loading...</p> : all.length === 0 ? (
+        <Empty title="No complaints yet" text="Spotted something broken on campus? Report it and track it here.">
+          <button className="btn" onClick={() => go("new")}>Report an issue</button>
+        </Empty>
+      ) : <div className="card"><MiniList items={all.slice(0, 5)} onOpen={onOpen} /></div>}
+    </>
+  );
+}
+
+export function NewComplaint({ token, onCreated, go, onOpen }) {
+  const empty = { title: "", description: "", category: "", location: "", image_url: "" };
+  const [cats, setCats] = useState([]);
+  const [f, setF] = useState(empty);
+  const [sug, setSug] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(null);
+  const file = useRef(null);
+
+  useEffect(() => { api("/categories").then(setCats).catch(() => {}); }, []);
+
+  useEffect(() => {
+    const text = `${f.title} ${f.description}`.trim();
+    if (text.length < 8) return setSug(null);
+    const t = setTimeout(() => api("/suggest", "POST", { text }).then(setSug).catch(() => {}), 450);
+    return () => clearTimeout(t);
+  }, [f.title, f.description]);
+
+  const upload = async (picked) => {
+    if (!picked) return;
+    if (!CLOUD || !PRESET) return setErr("Image upload is not configured (Cloudinary settings missing).");
+    setUploading(true); setErr("");
+    try {
+      const fd = new FormData();
+      fd.append("file", picked);
+      fd.append("upload_preset", PRESET);
+      const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD}/image/upload`, { method: "POST", body: fd });
+      const d = await r.json();
+      if (!d.secure_url) throw new Error(d.error?.message || "Upload failed");
+      setF((p) => ({ ...p, image_url: d.secure_url }));
+    } catch (e) { setErr(e.message); } finally { setUploading(false); }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(""); setBusy(true);
+    try {
+      const c = await api("/complaints", "POST",
+        { ...f, category: f.category || null, image_url: f.image_url || null }, token);
+      setDone(c); setF(empty); onCreated();
+    } catch (x) { setErr(x.message); } finally { setBusy(false); }
+  };
+
+  if (done) {
+    return (
+      <div className="card success">
+        <div className="success-ico"><Icon name="check" size={28} /></div>
+        <h2>Complaint submitted</h2>
+        <p className="muted">Your ticket number is</p>
+        <div className="ticket">{done.ticket_id}</div>
+        <p className="muted">Routed to <b>{done.department}</b> · {done.category} · {done.priority} priority<br />
+          Expected resolution by {fmt(done.due_at)}</p>
+        <div className="row-flex center">
+          <button className="btn ghost" onClick={() => onOpen(done.id)}>View ticket</button>
+          <button className="btn ghost" onClick={() => go("mine")}>My complaints</button>
+          <button className="btn" onClick={() => setDone(null)}>Report another</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="page-head"><div><h1>New complaint</h1>
+        <p className="sub">Describe the issue. We will route it to the right department automatically.</p></div></div>
+      <form className="card form cols" onSubmit={submit}>
+        <div className="field span2">
+          <label>Title</label>
+          <input required placeholder="e.g. Wi-Fi not working in library" value={f.title}
+            onChange={(e) => setF({ ...f, title: e.target.value })} />
+        </div>
+        <div className="field span2">
+          <label>Description</label>
+          <textarea required rows={4} placeholder="What is wrong, since when, and who is affected?" value={f.description}
+            onChange={(e) => setF({ ...f, description: e.target.value })} />
+        </div>
+        <div className="field">
+          <label>Category</label>
+          <select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>
+            <option value="">Auto-detect</option>
+            {cats.map((c) => <option key={c.name}>{c.name}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label>Location</label>
+          <input placeholder="Block / floor / room" value={f.location}
+            onChange={(e) => setF({ ...f, location: e.target.value })} />
+        </div>
+
+        {sug && (
+          <div className="suggest span2">
+            <Icon name="spark" size={16} />
+            <span>
+              Detected {f.category ? "" : <b>{sug.category}</b>}
+              {f.category ? <>priority <b>{sug.priority}</b></> : <> · priority <b>{sug.priority}</b> · goes to <b>{sug.department}</b></>}
+            </span>
+          </div>
+        )}
+
+        <div className="field span2">
+          <label>Photo (optional)</label>
+          {f.image_url ? (
+            <div className="preview">
+              <img src={f.image_url} alt="Preview" />
+              <button type="button" className="btn ghost sm" onClick={() => setF({ ...f, image_url: "" })}>Remove</button>
+            </div>
+          ) : (
+            <div className="drop" onClick={() => file.current.click()}>
+              <Icon name="image" size={22} />
+              <div>{uploading ? "Uploading..." : "Click to add a photo"}</div>
+              <input ref={file} type="file" accept="image/*" hidden onChange={(e) => upload(e.target.files[0])} />
+            </div>
+          )}
+        </div>
+
+        {err && <div className="alert err span2">{err}</div>}
+        <div className="span2 actions">
+          <button className="btn" disabled={busy || uploading}>{busy ? "Submitting..." : "Submit complaint"}</button>
+        </div>
+      </form>
+    </>
+  );
+}
+
+/* ---------- department admin + super admin ---------- */
+export function StaffOverview({ auth, tick, go, onOpen }) {
+  const [s, setS] = useState(null);
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    api("/stats", "GET", null, auth.token).then(setS).catch(() => {});
+    api("/complaints", "GET", null, auth.token).then(setItems).catch(() => {});
+  }, [tick]);
+
+  const attention = items
+    .filter((c) => (c.status === "Submitted" || c.status === "In Progress") && (c.is_overdue || c.priority === "Urgent"))
+    .sort((a, b) => a.due_at.localeCompare(b.due_at)).slice(0, 6);
+  const maxDay = s ? Math.max(...s.last7.map((d) => d.count), 1) : 1;
+  const isAdmin = auth.user.role === "admin";
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>{isAdmin ? "Campus overview" : `${auth.user.department} dashboard`}</h1>
+          <p className="sub">{isAdmin ? "All departments" : "Complaints assigned to your department"}</p>
+        </div>
+        <button className="btn" onClick={() => go("complaints")}>Open complaints</button>
+      </div>
+
+      {!s ? <p className="muted">Loading...</p> : (
+        <>
+          <div className="grid stats">
+            <Stat icon="doc" label="Total" value={s.total} />
+            <Stat icon="inbox" tone="slate" label="New" value={s.by_status.Submitted || 0} />
+            <Stat icon="clock" tone="amber" label="In progress" value={s.by_status["In Progress"] || 0} />
+            <Stat icon="check" tone="green" label="Resolved" value={s.by_status.Resolved || 0} />
+            <Stat icon="alert" tone="red" label="Overdue" value={s.overdue} />
+            <Stat icon="clock" tone="blue" label="Avg hours to resolve" value={s.avg_resolution_hours ?? "-"} />
+            <Stat icon="star" tone="amber" label={`Avg rating${s.rating_count ? ` (${s.rating_count})` : ""}`} value={s.avg_rating ?? "-"} />
+          </div>
+
+          <div className="grid two">
+            <div className="card">
+              <h3>Complaints, last 7 days</h3>
+              <div className="trend">
+                {s.last7.map((d) => (
+                  <div className="col" key={d.date}>
+                    <small>{d.count}</small>
+                    <div className="bar" style={{ height: `${(d.count / maxDay) * 100}%` }} />
+                    <small>{d.label}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="card"><h3>By category</h3><BarList data={s.by_category} /></div>
+          </div>
+
+          <div className="grid two">
+            <div className="card"><h3>By priority</h3><BarList data={s.by_priority} tone="amber" /></div>
+            {isAdmin
+              ? <div className="card"><h3>By department</h3><BarList data={s.by_department} tone="green" /></div>
+              : <div className="card"><h3>By status</h3><BarList data={s.by_status} tone="green" /></div>}
+          </div>
+        </>
+      )}
+
+      <div className="section-head"><h2>Needs attention</h2><span className="muted sm">Overdue or urgent, still open</span></div>
+      {attention.length === 0
+        ? <div className="card"><p className="muted">Nothing urgent. Everything is on track.</p></div>
+        : <div className="card"><MiniList items={attention} onOpen={onOpen} /></div>}
+    </>
+  );
+}
+
+export function ManageStaff({ token, departments, tick }) {
+  const [staff, setStaff] = useState(null);
+  const [f, setF] = useState({ name: "", email: "", password: "", department_id: "" });
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [resetId, setResetId] = useState(null);
+  const [newPw, setNewPw] = useState("");
+
+  const load = () => api("/staff", "GET", null, token).then(setStaff).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, [tick]);
+  useEffect(() => {
+    if (!f.department_id && departments.length) setF((p) => ({ ...p, department_id: String(departments[0].id) }));
+  }, [departments]);
+
+  const add = async (e) => {
+    e.preventDefault();
+    setErr(""); setOk(""); setBusy(true);
+    try {
+      const s = await api("/staff", "POST", { ...f, department_id: Number(f.department_id) }, token);
+      setOk(`${s.name} can now sign in as ${s.department} admin with ${s.email}.`);
+      setF({ ...f, name: "", email: "", password: "" });
+      load();
+    } catch (x) { setErr(x.message); } finally { setBusy(false); }
+  };
+  const changeDept = async (id, department_id) => {
+    setErr("");
+    try { await api(`/staff/${id}`, "PATCH", { department_id: Number(department_id) }, token); load(); }
+    catch (x) { setErr(x.message); }
+  };
+  const reset = async (id) => {
+    setErr(""); setOk("");
+    try {
+      await api(`/staff/${id}`, "PATCH", { password: newPw }, token);
+      setResetId(null); setNewPw(""); setOk("Password updated.");
+    } catch (x) { setErr(x.message); }
+  };
+  const remove = async (s) => {
+    if (!window.confirm(`Remove ${s.name} as department admin? Their account stays as a normal user.`)) return;
+    try { await api(`/staff/${s.id}`, "DELETE", null, token); load(); } catch (x) { setErr(x.message); }
+  };
+
+  return (
+    <>
+      <div className="page-head"><div><h1>Manage staff</h1>
+        <p className="sub">Give each department admin their own login. They will only see complaints for their department.</p></div></div>
+
+      <form className="card form cols" onSubmit={add}>
+        <h3 className="span2">Add a department admin</h3>
+        <div className="field"><label>Full name</label>
+          <input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div className="field"><label>Email (their login)</label>
+          <input required type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
+        <div className="field"><label>Department</label>
+          <select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}>
+            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select></div>
+        <div className="field"><label>Temporary password</label>
+          <input required minLength={6} placeholder="At least 6 characters" value={f.password}
+            onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
+        {err && <div className="alert err span2">{err}</div>}
+        {ok && <div className="alert ok span2">{ok}</div>}
+        <div className="span2 actions"><button className="btn" disabled={busy}>{busy ? "Adding..." : "Add department admin"}</button></div>
+      </form>
+
+      <div className="section-head"><h2>Department admins</h2></div>
+      {staff === null ? <p className="muted">Loading...</p> : staff.length === 0 ? (
+        <Empty title="No department admins yet" text="Add one above so each department can manage its own complaints." />
+      ) : (
+        <div className="card table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Department</th><th></th></tr></thead>
+            <tbody>
+              {staff.map((s) => (
+                <tr key={s.id}>
+                  <td data-label="Name"><b>{s.name}</b></td>
+                  <td data-label="Email" className="muted">{s.email}</td>
+                  <td data-label="Department">
+                    <select className="inline" value={s.department_id || ""} onChange={(e) => changeDept(s.id, e.target.value)}>
+                      {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </td>
+                  <td data-label="Actions">
+                    {resetId === s.id ? (
+                      <div className="row-flex end">
+                        <input className="inline" placeholder="New password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+                        <button className="btn sm" disabled={newPw.length < 6} onClick={() => reset(s.id)}>Save</button>
+                        <button className="btn ghost sm" onClick={() => { setResetId(null); setNewPw(""); }}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="row-flex end">
+                        <button className="btn ghost sm" onClick={() => setResetId(s.id)}><Icon name="key" size={14} /> Reset password</button>
+                        <button className="btn danger sm" onClick={() => remove(s)}><Icon name="trash" size={14} /> Remove</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
