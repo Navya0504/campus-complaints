@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 export const STATUSES = ["Submitted", "In Progress", "Resolved", "Rejected"];
 export const PRIORITIES = ["Urgent", "High", "Medium", "Low"];
-export const ROLE_LABEL = { user: "Student / Staff", staff: "Department Admin", admin: "Super Admin" };
+export const ROLE_LABEL = { user: "Student / Staff", staff: "Department Staff", admin: "Super Admin" };
 
 export const parse = (d) => (d ? new Date(d.endsWith("Z") ? d : d + "Z") : null);
 export const fmt = (d) => {
@@ -33,6 +33,9 @@ const ICONS = {
   trash: <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />,
   doc: (<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8M8 17h8" /></>),
   inbox: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z" />,
+  lock: (<><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>),
+  user: (<><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /></>),
+  eye: (<><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" /><circle cx="12" cy="12" r="3" /></>),
   spark: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />,
 };
 

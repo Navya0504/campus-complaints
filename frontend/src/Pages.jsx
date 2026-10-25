@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
-  Icon, StatusBadge, PriorityBadge, Stat, Empty, BarList, fmt, fmtDate, STATUSES, PRIORITIES,
+  Icon, Avatar, StatusBadge, PriorityBadge, Stat, Empty, BarList, fmt, fmtDate, STATUSES, PRIORITIES,
 } from "./ui";
 
 const CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD;
 const PRESET = import.meta.env.VITE_CLOUDINARY_PRESET;
 
+const isOpen = (c) => c.status === "Submitted" || c.status === "In Progress";
+
 /* ---------- shared table ---------- */
-export function ComplaintTable({ items, onOpen, showUser, showDept = true }) {
+export function ComplaintTable({ items, onOpen, showUser, showDept = true, showHandler = false, markReadOnly = false }) {
   if (!items.length) return <Empty title="No complaints found" text="Nothing matches right now." />;
   return (
     <div className="card table-wrap">
@@ -17,36 +19,50 @@ export function ComplaintTable({ items, onOpen, showUser, showDept = true }) {
           <tr>
             <th>Ticket</th><th>Issue</th><th>Category</th>
             {showDept && <th>Department</th>}
+            {showHandler && <th>Handled by</th>}
             <th>Priority</th><th>Status</th><th>Raised</th>
           </tr>
         </thead>
         <tbody>
-          {items.map((c) => (
-            <tr key={c.id} className="click" onClick={() => onOpen(c.id)}>
-              <td data-label="Ticket"><b>{c.ticket_id}</b></td>
-              <td data-label="Issue" className="issue">
-                <div className="t">{c.title}</div>
-                {showUser && <div className="muted sm">by {c.submitted_by}</div>}
-              </td>
-              <td data-label="Category">{c.category}</td>
-              {showDept && <td data-label="Department">{c.department}</td>}
-              <td data-label="Priority"><PriorityBadge p={c.priority} /></td>
-              <td data-label="Status">
-                <div className="row-flex end">
-                  <StatusBadge s={c.status} />
-                  {c.is_overdue && <span className="pill overdue">Overdue</span>}
-                </div>
-              </td>
-              <td data-label="Raised" className="muted">{fmtDate(c.created_at)}</td>
-            </tr>
-          ))}
+          {items.map((c) => {
+            const readOnly = markReadOnly && !c.can_update && !c.can_claim;
+            return (
+              <tr key={c.id} className={"click" + (readOnly ? " dim" : "")} onClick={() => onOpen(c.id)}>
+                <td data-label="Ticket">
+                  <b>{c.ticket_id}</b>
+                  {readOnly && <span className="lock" title="View only"><Icon name="lock" size={13} /></span>}
+                </td>
+                <td data-label="Issue" className="issue">
+                  <div className="t">{c.title}</div>
+                  {showUser && <div className="muted sm">by {c.submitted_by}</div>}
+                </td>
+                <td data-label="Category">{c.category}</td>
+                {showDept && <td data-label="Department">{c.department}</td>}
+                {showHandler && (
+                  <td data-label="Handled by">
+                    {c.assigned_to ? c.assigned_to
+                      : isOpen(c) ? <span className="pill queue">In queue</span> : <span className="muted">-</span>}
+                  </td>
+                )}
+                <td data-label="Priority"><PriorityBadge p={c.priority} /></td>
+                <td data-label="Status">
+                  <div className="row-flex end">
+                    <StatusBadge s={c.status} />
+                    {c.is_overdue && <span className="pill overdue">Overdue</span>}
+                  </div>
+                </td>
+                <td data-label="Raised" className="muted">{fmtDate(c.created_at)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
   );
 }
 
-function MiniList({ items, onOpen }) {
+function MiniList({ items, onOpen, empty }) {
+  if (!items.length) return <p className="muted">{empty || "Nothing here."}</p>;
   return (
     <div className="mini">
       {items.map((c) => (
@@ -56,6 +72,7 @@ function MiniList({ items, onOpen }) {
             <div className="muted sm">{c.category} · {c.department} · due {fmtDate(c.due_at)}</div>
           </div>
           <div className="row-flex end">
+            <PriorityBadge p={c.priority} />
             <StatusBadge s={c.status} />
             {c.is_overdue && <span className="pill overdue">Overdue</span>}
           </div>
@@ -66,7 +83,8 @@ function MiniList({ items, onOpen }) {
 }
 
 /* ---------- complaints list with filters (all roles) ---------- */
-export function ComplaintsPage({ token, role, departments, onOpen, tick, title, subtitle }) {
+export function ComplaintsPage({ token, user, departments, onOpen, tick, title, subtitle }) {
+  const role = user.role;
   const [items, setItems] = useState(null);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
@@ -74,34 +92,63 @@ export function ComplaintsPage({ token, role, departments, onOpen, tick, title, 
   const [category, setCategory] = useState("");
   const [priority, setPriority] = useState("");
   const [dept, setDept] = useState("");
+  const [scope, setScope] = useState("dept"); // staff only: dept | all
 
   useEffect(() => {
-    api("/complaints", "GET", null, token).then(setItems).catch((e) => setErr(e.message));
-  }, [tick]);
+    setItems(null);
+    api("/complaints" + (role === "staff" ? `?scope=${scope}` : ""), "GET", null, token)
+      .then(setItems).catch((e) => setErr(e.message));
+  }, [tick, scope]);
+
+  const tabs = role === "staff" ? ["All", "Unassigned", "Mine", ...STATUSES, "Overdue"]
+    : role === "admin" ? ["All", "Unassigned", ...STATUSES, "Overdue"]
+    : ["All", ...STATUSES];
 
   const all = items || [];
   const cats = useMemo(() => [...new Set(all.map((c) => c.category))].sort(), [items]);
-  const count = (t) =>
-    t === "All" ? all.length : t === "Overdue" ? all.filter((c) => c.is_overdue).length
-      : all.filter((c) => c.status === t).length;
+  const match = (c, t) =>
+    t === "All" ? true
+      : t === "Overdue" ? c.is_overdue
+      : t === "Unassigned" ? isOpen(c) && !c.assigned_to_id
+      : t === "Mine" ? c.assigned_to_id === user.id
+      : c.status === t;
+  const count = (t) => all.filter((c) => match(c, t)).length;
 
   const shown = all.filter((c) => {
-    if (tab === "Overdue" ? !c.is_overdue : tab !== "All" && c.status !== tab) return false;
+    if (!match(c, tab)) return false;
     if (category && c.category !== category) return false;
     if (priority && c.priority !== priority) return false;
     if (dept && String(c.department_id) !== dept) return false;
     if (q) {
-      const hay = `${c.ticket_id} ${c.title} ${c.description} ${c.location} ${c.submitted_by}`.toLowerCase();
+      const hay = `${c.ticket_id} ${c.title} ${c.description} ${c.location} ${c.submitted_by} ${c.assigned_to || ""}`.toLowerCase();
       if (!hay.includes(q.toLowerCase())) return false;
     }
     return true;
   });
 
+  const showDeptFilter = role === "admin" || (role === "staff" && scope === "all");
+
   return (
     <>
-      <div className="page-head"><div><h1>{title}</h1><p className="sub">{subtitle}</p></div></div>
+      <div className="page-head">
+        <div><h1>{title}</h1><p className="sub">{subtitle}</p></div>
+        {role === "staff" && (
+          <div className="seg inline">
+            <button className={scope === "dept" ? "on" : ""} onClick={() => { setScope("dept"); setDept(""); setTab("All"); }}>My department</button>
+            <button className={scope === "all" ? "on" : ""} onClick={() => { setScope("all"); setTab("All"); }}>All departments</button>
+          </div>
+        )}
+      </div>
+
+      {role === "staff" && scope === "all" && (
+        <div className="banner info">
+          <Icon name="eye" size={18} />
+          <div>You are viewing every department. You can open any complaint, but you can only work on complaints of your own department.</div>
+        </div>
+      )}
+
       <div className="tabs">
-        {["All", ...STATUSES, "Overdue"].map((t) => (
+        {tabs.map((t) => (
           <button key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
             {t} <span>{count(t)}</span>
           </button>
@@ -110,7 +157,7 @@ export function ComplaintsPage({ token, role, departments, onOpen, tick, title, 
       <div className="toolbar">
         <div className="search">
           <Icon name="search" size={16} />
-          <input placeholder="Search ticket, title, location..." value={q} onChange={(e) => setQ(e.target.value)} />
+          <input placeholder="Search ticket, title, location, person..." value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <select value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">All categories</option>
@@ -120,7 +167,7 @@ export function ComplaintsPage({ token, role, departments, onOpen, tick, title, 
           <option value="">All priorities</option>
           {PRIORITIES.map((p) => <option key={p}>{p}</option>)}
         </select>
-        {role === "admin" && (
+        {showDeptFilter && (
           <select value={dept} onChange={(e) => setDept(e.target.value)}>
             <option value="">All departments</option>
             {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -129,17 +176,19 @@ export function ComplaintsPage({ token, role, departments, onOpen, tick, title, 
       </div>
       {err && <div className="alert err">{err}</div>}
       {items === null && !err ? <p className="muted">Loading...</p>
-        : <ComplaintTable items={shown} onOpen={onOpen} showUser={role !== "user"} showDept={role !== "staff"} />}
+        : <ComplaintTable items={shown} onOpen={onOpen} showUser={role !== "user"}
+            showDept={role === "admin" || (role === "staff" && scope === "all")}
+            showHandler={role !== "user"} markReadOnly={role === "staff"} />}
     </>
   );
 }
 
-/* ---------- student / staff member ---------- */
+/* ---------- student / staff member who reports issues ---------- */
 export function UserOverview({ auth, tick, go, onOpen, openAccount }) {
   const [items, setItems] = useState(null);
   useEffect(() => { api("/complaints", "GET", null, auth.token).then(setItems).catch(() => setItems([])); }, [tick]);
   const all = items || [];
-  const open = all.filter((c) => c.status === "Submitted" || c.status === "In Progress").length;
+  const open = all.filter(isOpen).length;
   const first = auth.user.name.split(" ")[0];
 
   return (
@@ -300,7 +349,7 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
   );
 }
 
-/* ---------- department admin + super admin ---------- */
+/* ---------- department staff + super admin ---------- */
 export function StaffOverview({ auth, tick, go, onOpen }) {
   const [s, setS] = useState(null);
   const [items, setItems] = useState([]);
@@ -309,18 +358,20 @@ export function StaffOverview({ auth, tick, go, onOpen }) {
     api("/complaints", "GET", null, auth.token).then(setItems).catch(() => {});
   }, [tick]);
 
-  const attention = items
-    .filter((c) => (c.status === "Submitted" || c.status === "In Progress") && (c.is_overdue || c.priority === "Urgent"))
-    .sort((a, b) => a.due_at.localeCompare(b.due_at)).slice(0, 6);
-  const maxDay = s ? Math.max(...s.last7.map((d) => d.count), 1) : 1;
   const isAdmin = auth.user.role === "admin";
+  const me = auth.user.id;
+  const byDue = (a, b) => a.due_at.localeCompare(b.due_at);
+  const queue = items.filter((c) => isOpen(c) && !c.assigned_to_id).sort(byDue).slice(0, 6);
+  const mine = items.filter((c) => isOpen(c) && c.assigned_to_id === me).sort(byDue).slice(0, 6);
+  const attention = items.filter((c) => isOpen(c) && (c.is_overdue || c.priority === "Urgent")).sort(byDue).slice(0, 6);
+  const maxDay = s ? Math.max(...s.last7.map((d) => d.count), 1) : 1;
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>{isAdmin ? "Campus overview" : `${auth.user.department} dashboard`}</h1>
-          <p className="sub">{isAdmin ? "All departments" : "Complaints assigned to your department"}</p>
+          <p className="sub">{isAdmin ? "All departments" : `Hello ${auth.user.name.split(" ")[0]}. Take a complaint from the queue to start working on it.`}</p>
         </div>
         <button className="btn" onClick={() => go("complaints")}>Open complaints</button>
       </div>
@@ -328,10 +379,12 @@ export function StaffOverview({ auth, tick, go, onOpen }) {
       {!s ? <p className="muted">Loading...</p> : (
         <>
           <div className="grid stats">
-            <Stat icon="doc" label="Total" value={s.total} />
-            <Stat icon="inbox" tone="slate" label="New" value={s.by_status.Submitted || 0} />
+            {!isAdmin && <Stat icon="user" tone="blue" label="My open work" value={s.mine_open} />}
+            {!isAdmin && <Stat icon="check" tone="green" label="Resolved by me" value={s.mine_resolved} />}
+            <Stat icon="inbox" tone="slate" label="Waiting in queue" value={s.unassigned} />
+            <Stat icon="doc" label={isAdmin ? "Total" : "Department total"} value={s.total} />
             <Stat icon="clock" tone="amber" label="In progress" value={s.by_status["In Progress"] || 0} />
-            <Stat icon="check" tone="green" label="Resolved" value={s.by_status.Resolved || 0} />
+            {isAdmin && <Stat icon="check" tone="green" label="Resolved" value={s.by_status.Resolved || 0} />}
             <Stat icon="alert" tone="red" label="Overdue" value={s.overdue} />
             <Stat icon="clock" tone="blue" label="Avg hours to resolve" value={s.avg_resolution_hours ?? "-"} />
             <Stat icon="star" tone="amber" label={`Avg rating${s.rating_count ? ` (${s.rating_count})` : ""}`} value={s.avg_rating ?? "-"} />
@@ -362,17 +415,89 @@ export function StaffOverview({ auth, tick, go, onOpen }) {
         </>
       )}
 
-      <div className="section-head"><h2>Needs attention</h2><span className="muted sm">Overdue or urgent, still open</span></div>
-      {attention.length === 0
-        ? <div className="card"><p className="muted">Nothing urgent. Everything is on track.</p></div>
-        : <div className="card"><MiniList items={attention} onOpen={onOpen} /></div>}
+      {!isAdmin && (
+        <>
+          <div className="section-head"><h2>My work</h2><span className="muted sm">Complaints you have taken</span></div>
+          <div className="card"><MiniList items={mine} onOpen={onOpen} empty="You have not taken any complaint yet." /></div>
+          <div className="section-head"><h2>Department queue</h2><span className="muted sm">Open complaints nobody has taken yet</span></div>
+          <div className="card"><MiniList items={queue} onOpen={onOpen} empty="The queue is empty. Great job!" /></div>
+        </>
+      )}
+      {isAdmin && (
+        <>
+          <div className="section-head"><h2>Needs attention</h2><span className="muted sm">Overdue or urgent, still open</span></div>
+          <div className="card"><MiniList items={attention} onOpen={onOpen} empty="Nothing urgent. Everything is on track." /></div>
+        </>
+      )}
     </>
   );
 }
 
+/* ---------- team (read-only for everyone except your own profile) ---------- */
+export function TeamPage({ auth, tick, onOpen, onEditProfile }) {
+  const [team, setTeam] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { api("/team", "GET", null, auth.token).then(setTeam).catch((e) => setErr(e.message)); }, [tick]);
+
+  const isAdmin = auth.user.role === "admin";
+  const groups = {};
+  (team || []).forEach((m) => { (groups[m.department] = groups[m.department] || []).push(m); });
+
+  return (
+    <>
+      <div className="page-head">
+        <div>
+          <h1>{isAdmin ? "Department teams" : `${auth.user.department} team`}</h1>
+          <p className="sub">{isAdmin
+            ? "Everyone who resolves complaints, by department."
+            : "Your colleagues and what they are working on. You can edit only your own details."}</p>
+        </div>
+      </div>
+      {err && <div className="alert err">{err}</div>}
+      {team === null && !err && <p className="muted">Loading...</p>}
+      {team && team.length === 0 && (
+        <Empty title="No team members yet" text={isAdmin ? "Add staff under Manage staff." : "Ask the Super Admin to add your colleagues."} />
+      )}
+      {Object.entries(groups).map(([dept, members]) => (
+        <div key={dept}>
+          {isAdmin && <div className="section-head"><h2>{dept}</h2><span className="muted sm">{members.length} member{members.length > 1 ? "s" : ""}</span></div>}
+          <div className="grid team">
+            {members.map((m) => (
+              <div key={m.id} className={"card member" + (m.is_me ? " me" : "")}>
+                <div className="row-flex">
+                  <Avatar name={m.name} size={44} />
+                  <div>
+                    <b>{m.name}</b> {m.is_me && <span className="pill you">You</span>}
+                    <div className="muted sm">{m.title || "Role not set"}</div>
+                  </div>
+                </div>
+                <div className="muted sm">{m.email}</div>
+                <div className="counts">
+                  <span><b>{m.open_count}</b> open</span>
+                  <span><b>{m.resolved_count}</b> resolved</span>
+                </div>
+                {m.working_on.length > 0 ? (
+                  <div className="working">
+                    <small>Working on</small>
+                    {m.working_on.map((w) => (
+                      <a key={w.id} onClick={() => onOpen(w.id)}>{w.ticket_id} · {w.title}</a>
+                    ))}
+                  </div>
+                ) : <p className="muted sm">Not working on anything right now.</p>}
+                {m.is_me && <button className="btn ghost sm" onClick={onEditProfile}><Icon name="user" size={14} /> Edit my profile</button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ---------- Super Admin: add and manage staff ---------- */
 export function ManageStaff({ token, departments, tick }) {
   const [staff, setStaff] = useState(null);
-  const [f, setF] = useState({ name: "", email: "", password: "", department_id: "" });
+  const [f, setF] = useState({ name: "", email: "", password: "", department_id: "", title: "" });
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
@@ -390,38 +515,40 @@ export function ManageStaff({ token, departments, tick }) {
     setErr(""); setOk(""); setBusy(true);
     try {
       const s = await api("/staff", "POST", { ...f, department_id: Number(f.department_id) }, token);
-      setOk(`${s.name} can now sign in as ${s.department} admin with ${s.email}.`);
-      setF({ ...f, name: "", email: "", password: "" });
+      setOk(`${s.name} can now sign in under ${s.department} with ${s.email}. Share the temporary password with them.`);
+      setF({ ...f, name: "", email: "", password: "", title: "" });
       load();
     } catch (x) { setErr(x.message); } finally { setBusy(false); }
   };
-  const changeDept = async (id, department_id) => {
+  const changeDept = async (s, department_id) => {
+    if (s.open_count > 0 && !window.confirm(
+      `${s.name} has ${s.open_count} open complaint(s). They will go back to the queue of the old department. Continue?`)) return;
     setErr("");
-    try { await api(`/staff/${id}`, "PATCH", { department_id: Number(department_id) }, token); load(); }
+    try { await api(`/staff/${s.id}`, "PATCH", { department_id: Number(department_id) }, token); load(); }
     catch (x) { setErr(x.message); }
   };
   const reset = async (id) => {
     setErr(""); setOk("");
     try {
       await api(`/staff/${id}`, "PATCH", { password: newPw }, token);
-      setResetId(null); setNewPw(""); setOk("Password updated.");
+      setResetId(null); setNewPw(""); setOk("Password updated. Share it with the staff member.");
     } catch (x) { setErr(x.message); }
   };
   const remove = async (s) => {
-    if (!window.confirm(`Remove ${s.name} as department admin? Their account stays as a normal user.`)) return;
+    if (!window.confirm(`Remove ${s.name} from ${s.department}? Their open complaints return to the queue and their account becomes a normal user.`)) return;
     try { await api(`/staff/${s.id}`, "DELETE", null, token); load(); } catch (x) { setErr(x.message); }
   };
 
   return (
     <>
       <div className="page-head"><div><h1>Manage staff</h1>
-        <p className="sub">Give each department admin their own login. They will only see complaints for their department.</p></div></div>
+        <p className="sub">Add the professors and staff who resolve complaints. Each person gets their own login and sees only their department's work.</p></div></div>
 
       <form className="card form cols" onSubmit={add}>
-        <h3 className="span2">Add a department admin</h3>
+        <h3 className="span2">Add a staff member</h3>
         <div className="field"><label>Full name</label>
           <input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
-        <div className="field"><label>Email (their login)</label>
+        <div className="field"><label>Email (their login, Google or college email)</label>
           <input required type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></div>
         <div className="field"><label>Department</label>
           <select value={f.department_id} onChange={(e) => setF({ ...f, department_id: e.target.value })}>
@@ -429,29 +556,34 @@ export function ManageStaff({ token, departments, tick }) {
           </select></div>
         <div className="field"><label>Temporary password</label>
           <input required minLength={6} placeholder="At least 6 characters" value={f.password}
-            onChange={(e) => setF({ ...f, password: e.target.value })} /></div>
+            onChange={(e) => setF({ ...f, password: e.target.value })} />
+          <span className="hint">They can change it after signing in.</span></div>
+        <div className="field span2"><label>Role (optional)</label>
+          <input placeholder="e.g. Network Engineer. The member can change this themselves." maxLength={80} value={f.title}
+            onChange={(e) => setF({ ...f, title: e.target.value })} /></div>
         {err && <div className="alert err span2">{err}</div>}
         {ok && <div className="alert ok span2">{ok}</div>}
-        <div className="span2 actions"><button className="btn" disabled={busy}>{busy ? "Adding..." : "Add department admin"}</button></div>
+        <div className="span2 actions"><button className="btn" disabled={busy}>{busy ? "Adding..." : "Add staff member"}</button></div>
       </form>
 
-      <div className="section-head"><h2>Department admins</h2></div>
+      <div className="section-head"><h2>Staff</h2></div>
       {staff === null ? <p className="muted">Loading...</p> : staff.length === 0 ? (
-        <Empty title="No department admins yet" text="Add one above so each department can manage its own complaints." />
+        <Empty title="No staff added yet" text="Add a person above so each department can resolve its own complaints." />
       ) : (
         <div className="card table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Department</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Role</th><th>Department</th><th>Work</th><th></th></tr></thead>
             <tbody>
               {staff.map((s) => (
                 <tr key={s.id}>
-                  <td data-label="Name"><b>{s.name}</b></td>
-                  <td data-label="Email" className="muted">{s.email}</td>
+                  <td data-label="Name"><b>{s.name}</b><div className="muted sm">{s.email}</div></td>
+                  <td data-label="Role" className="muted">{s.title || "-"}</td>
                   <td data-label="Department">
-                    <select className="inline" value={s.department_id || ""} onChange={(e) => changeDept(s.id, e.target.value)}>
+                    <select className="inline" value={s.department_id || ""} onChange={(e) => changeDept(s, e.target.value)}>
                       {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                   </td>
+                  <td data-label="Work" className="muted">{s.open_count} open · {s.resolved_count} resolved</td>
                   <td data-label="Actions">
                     {resetId === s.id ? (
                       <div className="row-flex end">

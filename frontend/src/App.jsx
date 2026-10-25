@@ -4,12 +4,14 @@ import { Icon, Avatar, ROLE_LABEL } from "./ui";
 import AuthScreen from "./Auth";
 import AccountModal from "./Account";
 import ComplaintDrawer from "./Detail";
-import { UserOverview, NewComplaint, ComplaintsPage, StaffOverview, ManageStaff } from "./Pages";
+import {
+  UserOverview, NewComplaint, ComplaintsPage, StaffOverview, ManageStaff, TeamPage,
+} from "./Pages";
 
 const NAV = {
   user: [["overview", "Overview", "dashboard"], ["new", "New complaint", "plus"], ["mine", "My complaints", "list"]],
-  staff: [["overview", "Overview", "dashboard"], ["complaints", "Complaints", "list"]],
-  admin: [["overview", "Overview", "dashboard"], ["complaints", "All complaints", "list"], ["staff", "Manage staff", "users"]],
+  staff: [["overview", "Overview", "dashboard"], ["complaints", "Complaints", "list"], ["team", "My team", "users"]],
+  admin: [["overview", "Overview", "dashboard"], ["complaints", "All complaints", "list"], ["team", "Teams", "users"], ["staff", "Manage staff", "building"]],
 };
 
 export default function App() {
@@ -25,10 +27,10 @@ export default function App() {
 
   const persist = (d) => { localStorage.setItem("auth", JSON.stringify(d)); setAuth(d); };
   const login = (d) => { persist(d); setPage("overview"); };
-  const logout = () => { localStorage.removeItem("auth"); setAuth(null); setOpenId(null); };
+  const logout = () => { localStorage.removeItem("auth"); setAuth(null); setOpenId(null); setAccount(false); };
   const updateUser = (user) => persist({ ...auth, user });
 
-  // keep the profile (role, department) fresh, and load departments for staff
+  // keep the profile (role, department, title) fresh, and load departments for staff
   useEffect(() => {
     if (!auth) return;
     api("/auth/me", "GET", null, auth.token).then((u) => {
@@ -50,13 +52,16 @@ export default function App() {
   if (user.role === "user") {
     view = current === "overview" ? <UserOverview auth={auth} tick={tick} go={setPage} onOpen={setOpenId} openAccount={() => setAccount(true)} />
       : current === "new" ? <NewComplaint token={token} onCreated={refresh} go={setPage} onOpen={setOpenId} />
-      : <ComplaintsPage token={token} role="user" departments={[]} onOpen={setOpenId} tick={tick}
+      : <ComplaintsPage token={token} user={user} departments={[]} onOpen={setOpenId} tick={tick}
           title="My complaints" subtitle="Everything you have reported, and where it stands." />;
   } else {
     view = current === "overview" ? <StaffOverview auth={auth} tick={tick} go={setPage} onOpen={setOpenId} />
-      : current === "complaints" ? <ComplaintsPage token={token} role={user.role} departments={departments} onOpen={setOpenId} tick={tick}
+      : current === "complaints" ? <ComplaintsPage token={token} user={user} departments={departments} onOpen={setOpenId} tick={tick}
           title={user.role === "admin" ? "All complaints" : `${user.department} complaints`}
-          subtitle={user.role === "admin" ? "Every complaint across all departments." : "Only complaints routed to your department."} />
+          subtitle={user.role === "admin"
+            ? "Every complaint across all departments."
+            : "Take a complaint from the queue to work on it. Other departments are view-only."} />
+      : current === "team" ? <TeamPage auth={auth} tick={tick} onOpen={setOpenId} onEditProfile={() => setAccount(true)} />
       : <ManageStaff token={token} departments={departments} tick={tick} />;
   }
 
@@ -79,6 +84,7 @@ export default function App() {
             <small>Signed in as</small>
             <b>{ROLE_LABEL[user.role]}</b>
             {user.department && <span>{user.department}</span>}
+            {user.title && <span>{user.title}</span>}
           </div>
         </div>
       </aside>

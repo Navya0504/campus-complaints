@@ -61,17 +61,35 @@ function GoogleButton({ onCredential }) {
 
 export default function AuthScreen({ onAuth }) {
   const [tab, setTab] = useState("user"); // user | staff
-  const [mode, setMode] = useState("login"); // login | register
+  const [mode, setMode] = useState("login"); // login | register (students only)
   const [f, setF] = useState({ name: "", email: "", password: "" });
+  const [depts, setDepts] = useState([]);
+  const [dept, setDept] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  useEffect(() => { api("/public/departments").then(setDepts).catch(() => {}); }, []);
 
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const deptName = (id) => depts.find((d) => String(d.id) === String(id))?.name;
+  const switchTab = (t) => { setTab(t); setMode("login"); setErr(""); };
+
+  // Decides whether this sign-in is allowed on the tab the person is using.
   const finish = (d) => {
-    if (tab === "staff" && !["staff", "admin"].includes(d.user.role)) {
-      setErr("This account is not a department admin account. Use the Student / Staff tab.");
-      return;
+    const role = d.user.role;
+    if (tab === "user") {
+      if (role !== "user") return setErr("This is a department staff account. Please use the Department login tab.");
+      return onAuth(d);
+    }
+    if (dept === "admin") {
+      if (role !== "admin") return setErr("This account is not the Super Admin.");
+      return onAuth(d);
+    }
+    if (role !== "staff") {
+      return setErr("This account has not been added as department staff. Ask the Super Admin to add you.");
+    }
+    if (String(d.user.department_id) !== String(dept)) {
+      return setErr(`You are not a member of ${deptName(dept)}. Select the department you were added to.`);
     }
     onAuth(d);
   };
@@ -79,6 +97,7 @@ export default function AuthScreen({ onAuth }) {
   const submit = async (e) => {
     e.preventDefault();
     setErr("");
+    if (tab === "staff" && !dept) return setErr("Select your department first.");
     setBusy(true);
     try {
       const d = mode === "login" || tab === "staff"
@@ -94,8 +113,9 @@ export default function AuthScreen({ onAuth }) {
 
   const google = async (credential) => {
     setErr("");
+    if (tab === "staff" && !dept) return setErr("Select your department first, then continue with Google.");
     try {
-      finish(await api("/auth/google", "POST", { credential }));
+      finish(await api("/auth/google", "POST", { credential, staff_login: tab === "staff" }));
     } catch (x) {
       setErr(x.message);
     }
@@ -114,8 +134,8 @@ export default function AuthScreen({ onAuth }) {
         <p>A transparent grievance system for your campus. Every complaint gets a ticket, reaches the right department and is tracked until it is resolved.</p>
         <ul>
           <li><Icon name="check" size={16} /> Instant ticket ID and smart department routing</li>
+          <li><Icon name="check" size={16} /> Each complaint handled by one named person</li>
           <li><Icon name="check" size={16} /> Live status with a full history trail</li>
-          <li><Icon name="check" size={16} /> Deadlines (SLA) and overdue alerts</li>
         </ul>
       </aside>
 
@@ -125,24 +145,31 @@ export default function AuthScreen({ onAuth }) {
             <div className="brand-logo"><Icon name="shield" size={20} /></div>
             <b>Campus Resolve</b>
           </div>
-          <h2>{registering ? "Create your account" : "Welcome back"}</h2>
+          <h2>{registering ? "Create your account" : tab === "staff" ? "Department login" : "Welcome back"}</h2>
           <p className="muted">
             {tab === "staff"
-              ? "Department admins sign in with the email and password given by the Super Admin."
+              ? "For professors and staff who resolve complaints. Choose your department, then sign in."
               : "Sign in to report an issue or track your complaints."}
           </p>
 
           <div className="seg">
-            <button className={tab === "user" ? "on" : ""} onClick={() => { setTab("user"); setErr(""); }}>Student / Staff</button>
-            <button className={tab === "staff" ? "on" : ""} onClick={() => { setTab("staff"); setMode("login"); setErr(""); }}>Department admin</button>
+            <button className={tab === "user" ? "on" : ""} onClick={() => switchTab("user")}>Student / Staff</button>
+            <button className={tab === "staff" ? "on" : ""} onClick={() => switchTab("staff")}>Department login</button>
           </div>
 
-          {tab === "user" && (
-            <>
-              <GoogleButton onCredential={google} />
-              <div className="or"><span>or use email</span></div>
-            </>
+          {tab === "staff" && (
+            <div className="field">
+              <label>Your department</label>
+              <select value={dept} onChange={(e) => { setDept(e.target.value); setErr(""); }}>
+                <option value="">Select your department</option>
+                {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value="admin">Super Admin (all departments)</option>
+              </select>
+            </div>
           )}
+
+          <GoogleButton onCredential={google} />
+          <div className="or"><span>or use email</span></div>
 
           <form onSubmit={submit} className="form">
             {registering && (
@@ -176,7 +203,10 @@ export default function AuthScreen({ onAuth }) {
             </p>
           )}
           {tab === "staff" && (
-            <p className="hint center">Need access? Ask the Super Admin to add your email to your department.</p>
+            <p className="hint center">
+              The Super Admin adds you to your department and gives you a password. You can sign in with that password, or with
+              Google using the same email. Forgot it? Ask the Super Admin to reset it.
+            </p>
           )}
         </div>
       </main>

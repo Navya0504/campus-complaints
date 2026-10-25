@@ -4,12 +4,36 @@ import { Avatar, Drawer, ROLE_LABEL } from "./ui";
 
 export default function AccountModal({ auth, onClose, onUpdated }) {
   const u = auth.user;
+  const isStaff = u.role === "staff";
+
+  const [name, setName] = useState(u.name);
+  const [title, setTitle] = useState(u.title || "");
+  const [pErr, setPErr] = useState("");
+  const [pOk, setPOk] = useState("");
+  const [pBusy, setPBusy] = useState(false);
+
   const [cur, setCur] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const saveProfile = async (e) => {
+    e.preventDefault();
+    setPErr(""); setPOk(""); setPBusy(true);
+    try {
+      const body = { name };
+      if (isStaff) body.title = title;
+      const user = await api("/auth/profile", "PATCH", body, auth.token);
+      onUpdated(user);
+      setPOk("Profile saved.");
+    } catch (x) {
+      setPErr(x.message);
+    } finally {
+      setPBusy(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -39,6 +63,21 @@ export default function AccountModal({ auth, onClose, onUpdated }) {
           <div className="muted">{ROLE_LABEL[u.role]}{u.department ? ` · ${u.department}` : ""}</div>
         </div>
       </div>
+
+      <form onSubmit={saveProfile} className="form">
+        <h3>My details</h3>
+        <div className="field"><label>Full name</label>
+          <input required value={name} onChange={(e) => setName(e.target.value)} /></div>
+        {isStaff && (
+          <div className="field"><label>My role in the department</label>
+            <input placeholder="e.g. Network Engineer, Electrician" maxLength={80} value={title}
+              onChange={(e) => setTitle(e.target.value)} />
+            <span className="hint">Your colleagues can see this on the Team page. Only you can change it.</span></div>
+        )}
+        {pErr && <div className="alert err">{pErr}</div>}
+        {pOk && <div className="alert ok">{pOk}</div>}
+        <button className="btn ghost" disabled={pBusy}>{pBusy ? "Saving..." : "Save details"}</button>
+      </form>
 
       <form onSubmit={submit} className="form">
         <h3>{u.has_password ? "Change password" : "Create a password"}</h3>
