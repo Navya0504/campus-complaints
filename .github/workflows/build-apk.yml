@@ -39,7 +39,7 @@ jobs:
       - name: Build the web app
         env:
           # EDIT THESE THREE VALUES (no trailing slash on the URL)
-          VITE_API_URL: https://campus-complaints-8ilo.onrender.com/
+          VITE_API_URL: https://campus-complaints-8ilo.onrender.com
           VITE_CLOUDINARY_CLOUD: zpnvw03d
           VITE_CLOUDINARY_PRESET: complaints
         run: |
