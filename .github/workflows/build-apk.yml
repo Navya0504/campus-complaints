@@ -1,0 +1,57 @@
+name: Build Android APK
+
+# Run it by hand: GitHub -> Actions -> "Build Android APK" -> Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install packages
+        run: npm ci
+
+      - name: Build the web app
+        env:
+          # EDIT THESE THREE VALUES (no trailing slash on the URL)
+          VITE_API_URL: https://campus-complaints-8ilo.onrender.com/
+          VITE_CLOUDINARY_CLOUD: zpnvw03d
+          VITE_CLOUDINARY_PRESET: complaints
+        run: npm run build
+
+      - name: Create the Android project
+        run: npx cap add android
+
+      - name: Copy the web app into it
+        run: npx cap sync android
+
+      - name: Build the APK
+        working-directory: frontend/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Save the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: campus-resolve-apk
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
