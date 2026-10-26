@@ -63,3 +63,7 @@ jobs:
         with:
           name: campus-resolve-apk
           path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+      
+      - name: Show the APK signing SHA-1
+        working-directory: frontend/android
+        run: keytool -printcert -jarfile app/build/outputs/apk/debug/app-debug.apk | grep SHA1
