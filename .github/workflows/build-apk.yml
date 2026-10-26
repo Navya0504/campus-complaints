@@ -30,24 +30,34 @@ jobs:
       - name: Install packages
         run: npm ci
 
-      - name: Use the fixed signing key (keeps Google login working on every build)
-        working-directory: ${{ github.workspace }}
-        run: |
-          mkdir -p ~/.android
-          cp android-signing/debug.keystore ~/.android/debug.keystore
-
       - name: Build the web app
         env:
-          # EDIT THESE THREE VALUES (no trailing slash on the URL)
           VITE_API_URL: https://campus-complaints-8ilo.onrender.com
           VITE_CLOUDINARY_CLOUD: zpnvw03d
           VITE_CLOUDINARY_PRESET: complaints
-        run: |
-          case "$VITE_API_URL" in *YOUR-RENDER-URL*|*your-render-url*) echo "STOP: VITE_API_URL still has the placeholder. Put your real Render address."; exit 1;; esac
-          npm run build
+        run: npm run build
 
       - name: Create the Android project
         run: npx cap add android
+
+      - name: Force the fixed signing key
+        working-directory: frontend/android
+        run: |
+          echo "Key file in repo:"
+          keytool -list -v -keystore ${{ github.workspace }}/android-signing/debug.keystore -storepass android | grep SHA1
+          cat >> app/build.gradle <<EOF
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file("${{ github.workspace }}/android-signing/debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+          }
+          EOF
 
       - name: Copy the web app into it
         run: npx cap sync android
@@ -58,14 +68,14 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Save the APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: campus-resolve-apk
-          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
-      
       - name: Show the APK signing SHA-1
         working-directory: frontend/android
         run: |
           APKSIGNER=$(ls $ANDROID_HOME/build-tools/*/apksigner | tail -1)
           $APKSIGNER verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-1"
+
+      - name: Save the APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: campus-resolve-apk
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
