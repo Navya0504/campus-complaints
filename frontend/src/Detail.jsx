@@ -70,6 +70,9 @@ export default function ComplaintDrawer({ id, token, user, departments, onClose,
             </div>
             <h3 className="d-title">{c.title}</h3>
             <p className="d-desc">{c.description}</p>
+            {c.ai_summary && (
+              <div className="ai-note"><Icon name="spark" size={15} /><span><b>AI summary:</b> {c.ai_summary}</span></div>
+            )}
             {c.image_url && (
               <a href={c.image_url} target="_blank" rel="noreferrer">
                 <img src={c.image_url} alt="Attached to complaint" className="d-img" />

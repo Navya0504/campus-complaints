@@ -318,7 +318,7 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
           <div className="suggest span2">
             <Icon name="spark" size={16} />
             <span>
-              Detected {f.category ? "" : <b>{sug.category}</b>}
+              Quick estimate: {f.category ? "" : <b>{sug.category}</b>}
               {f.category ? <>priority <b>{sug.priority}</b></> : <> · priority <b>{sug.priority}</b> · goes to <b>{sug.department}</b></>}
             </span>
           </div>
@@ -350,6 +350,32 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
 }
 
 /* ---------- department staff + super admin ---------- */
+// Super Admin only: one click to see whether AI triage (Gemini) is working.
+function AiStatus({ token }) {
+  const [r, setR] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const test = async () => {
+    setBusy(true);
+    try { setR(await api("/ai-status", "GET", null, token)); }
+    catch (x) { setR({ working: false, error: x.message }); }
+    setBusy(false);
+  };
+  return (
+    <div className="card">
+      <h3>AI triage</h3>
+      <p className="muted">New complaints are read by AI to pick the category, priority and a short summary. If AI is off, the keyword rules are used.</p>
+      <button className="btn ghost sm" onClick={test} disabled={busy}>{busy ? "Testing..." : "Test AI now"}</button>
+      {r && (
+        <div className={`alert ${r.working ? "ok" : "err"}`} style={{ marginTop: 12 }}>
+          {r.working
+            ? <>AI is working ({r.model}). Sample: {r.sample_result.category}, {r.sample_result.priority}.</>
+            : <>AI is not working: {r.error || "unknown error"}</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StaffOverview({ auth, tick, go, onOpen }) {
   const [s, setS] = useState(null);
   const [items, setItems] = useState([]);
@@ -389,6 +415,8 @@ export function StaffOverview({ auth, tick, go, onOpen }) {
             <Stat icon="clock" tone="blue" label="Avg hours to resolve" value={s.avg_resolution_hours ?? "-"} />
             <Stat icon="star" tone="amber" label={`Avg rating${s.rating_count ? ` (${s.rating_count})` : ""}`} value={s.avg_rating ?? "-"} />
           </div>
+
+          {isAdmin && <AiStatus token={auth.token} />}
 
           <div className="grid two">
             <div className="card">
