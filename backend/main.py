@@ -246,6 +246,12 @@ def seed():
         if not db.query(User).filter_by(role="admin").first():
             db.add(User(name="Super Admin", email="admin@campus.com",
                         password_hash=hash_pw("admin123"), role="admin"))
+        # Emergency reset: set ADMIN_RESET_PASSWORD on the host, restart, sign in, change it, then delete the variable.
+        reset = os.getenv("ADMIN_RESET_PASSWORD", "")
+        if reset:
+            admin = db.query(User).filter_by(role="admin").order_by(User.id).first()
+            if admin:
+                admin.password_hash = hash_pw(reset)
         db.commit()
 
 seed()
