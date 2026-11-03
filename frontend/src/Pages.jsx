@@ -20,7 +20,7 @@ export function ComplaintTable({ items, onOpen, showUser, showDept = true, showH
             <th>Ticket</th><th>Issue</th><th>Category</th>
             {showDept && <th>Department</th>}
             {showHandler && <th>Handled by</th>}
-            <th>Priority</th><th>Status</th><th>Raised</th>
+            <th>Priority</th><th>Affected</th><th>Status</th><th>Raised</th>
           </tr>
         </thead>
         <tbody>
@@ -45,6 +45,7 @@ export function ComplaintTable({ items, onOpen, showUser, showDept = true, showH
                   </td>
                 )}
                 <td data-label="Priority"><PriorityBadge p={c.priority} /></td>
+                <td data-label="Affected"><span className="aff" title="People who reported this issue">{(c.votes || 0) + 1}</span></td>
                 <td data-label="Status">
                   <div className="row-flex end">
                     <StatusBadge s={c.status} />
@@ -228,6 +229,7 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
   const [cats, setCats] = useState([]);
   const [f, setF] = useState(empty);
   const [sug, setSug] = useState(null);
+  const [similar, setSimilar] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -242,6 +244,24 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
     const t = setTimeout(() => api("/suggest", "POST", { text }).then(setSug).catch(() => {}), 450);
     return () => clearTimeout(t);
   }, [f.title, f.description]);
+
+  // look for the same problem that someone has already reported
+  useEffect(() => {
+    const text = `${f.title} ${f.description}`.trim();
+    if (text.length < 12) return setSimilar([]);
+    const t = setTimeout(() => {
+      api("/similar", "POST", { title: f.title, description: f.description, location: f.location }, token)
+        .then(setSimilar).catch(() => {});
+    }, 900);
+    return () => clearTimeout(t);
+  }, [f.title, f.description, f.location]);
+
+  const meToo = async (id) => {
+    try {
+      const r = await api(`/complaints/${id}/vote`, "POST", null, token);
+      setSimilar((list) => list.map((x) => (x.id === id ? { ...x, votes: r.votes, voted: r.voted } : x)));
+    } catch (x) { setErr(x.message); }
+  };
 
   const upload = async (picked) => {
     if (!picked) return;
@@ -321,6 +341,24 @@ export function NewComplaint({ token, onCreated, go, onOpen }) {
               Quick estimate: {f.category ? "" : <b>{sug.category}</b>}
               {f.category ? <>priority <b>{sug.priority}</b></> : <> · priority <b>{sug.priority}</b> · goes to <b>{sug.department}</b></>}
             </span>
+          </div>
+        )}
+
+        {similar.length > 0 && (
+          <div className="similar span2">
+            <b>Has someone already reported this?</b>
+            <p className="sm muted">Adding yourself helps staff see how many people are affected, and the issue gets fixed sooner.</p>
+            {similar.map((x) => (
+              <div className="sim-item" key={x.id}>
+                <div>
+                  <div className="t">{x.title}</div>
+                  <div className="sm muted">{x.ticket_id} · {x.category} · {x.status} · {x.votes + 1} affected</div>
+                </div>
+                <button type="button" className={"btn sm " + (x.voted ? "" : "ghost")} onClick={() => meToo(x.id)}>
+                  {x.voted ? "Added ✓" : "Me too"}
+                </button>
+              </div>
+            ))}
           </div>
         )}
 

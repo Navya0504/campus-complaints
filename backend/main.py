@@ -85,6 +85,13 @@ class StatusHistory(Base):
     changed_by: Mapped[str] = mapped_column(String(100))
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
+class Upvote(Base):
+    __tablename__ = "upvotes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    complaint_id: Mapped[int] = mapped_column(ForeignKey("complaints.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
 class Feedback(Base):
     __tablename__ = "feedback"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -131,6 +138,32 @@ def guess_priority(t):
     if has(t, HIGH):
         return "High"
     return "Medium"
+
+
+# ---------- similar complaints ----------
+STOP = set("the a an and or of to in on at is are was were be been it its this that there here for with from "
+           "by as not no has have had since very too very can could would should please sir madam our my we i "
+           "you they them still again always never when what which who how why please kindly".split())
+ALIASES = {"wi-fi": "wifi", "internet": "wifi", "network": "wifi", "toilets": "toilet", "washrooms": "washroom"}
+SIMILAR_DAYS = 45
+VOTES_TO_ESCALATE = 5
+
+def tokens(text):
+    out = set()
+    for w in re.findall(r"[a-z0-9][a-z0-9\-]+", text.lower()):
+        w = ALIASES.get(w, w)
+        if w.endswith("s") and len(w) > 4:
+            w = w[:-1]
+        if len(w) >= 3 and w not in STOP:
+            out.add(w)
+    return out
+
+def similarity(a, b):
+    """0..1 - how alike two sets of words are (needs at least two shared words)."""
+    shared = a & b
+    if len(shared) < 2 or not a or not b:
+        return 0.0
+    return max(len(shared) / len(a | b), 0.9 * len(shared) / min(len(a), len(b)))
 
 
 # ---------- AI triage (Gemini) ----------
@@ -351,6 +384,11 @@ class FeedbackIn(BaseModel):
 class SuggestIn(BaseModel):
     text: str
 
+class SimilarIn(BaseModel):
+    title: str = ""
+    description: str = ""
+    location: str = ""
+
 class StaffIn(BaseModel):
     name: str = Field(min_length=1)
     email: str
@@ -381,6 +419,8 @@ def out(c, db, detail=False, user=None):
         "assigned_to": worker.name if worker else None,
         "is_overdue": c.status in OPEN and c.due_at < now(),
         "ai_summary": c.ai_summary, "triage": c.triage,
+        "votes": db.query(func.count(Upvote.id)).filter(Upvote.complaint_id == c.id).scalar() or 0,
+        "voted": bool(user is not None and db.query(Upvote.id).filter_by(complaint_id=c.id, user_id=user.id).first()),
     }
     if user is not None:
         d.update(perm(user, c))
@@ -522,6 +562,53 @@ def suggest(body: SuggestIn):
     t = body.text.lower()
     cat = guess_category(t)
     return {"category": cat, "priority": guess_priority(t), "department": CATEGORIES[cat][0]}
+
+
+@app.post("/similar")
+def similar(body: SimilarIn, user=Depends(current_user), db=Depends(get_db)):
+    """Open complaints that look like the one being typed (so people can say 'me too' instead of filing a copy)."""
+    mine = tokens(body.title + " " + body.description + " " + body.location)
+    if len(mine) < 2:
+        return []
+    since = now() - timedelta(days=SIMILAR_DAYS)
+    rows = db.query(Complaint).filter(Complaint.status.in_(OPEN), Complaint.created_at >= since,
+                                      Complaint.user_id != user.id).all()
+    scored = []
+    for c in rows:
+        sc = similarity(mine, tokens(c.title + " " + c.description + " " + (c.location or "")))
+        if sc >= 0.3:
+            scored.append((sc, c))
+    scored.sort(key=lambda x: -x[0])
+    res = []
+    for sc, c in scored[:3]:
+        o = out(c, db, user=user)
+        # only what a stranger needs: no names, no description
+        res.append({k: o[k] for k in ("id", "ticket_id", "title", "category", "status", "votes", "voted", "location")})
+    return res
+
+@app.post("/complaints/{cid}/vote")
+def vote(cid: int, user=Depends(current_user), db=Depends(get_db)):
+    """'Me too': toggles your upvote. Many upvotes raise the priority automatically."""
+    c = db.get(Complaint, cid)
+    if not c:
+        raise HTTPException(404, "Complaint not found")
+    if c.user_id == user.id:
+        raise HTTPException(400, "You reported this one, so it already counts.")
+    existing = db.query(Upvote).filter_by(complaint_id=cid, user_id=user.id).first()
+    if existing:
+        db.delete(existing)
+    else:
+        if c.status not in OPEN:
+            raise HTTPException(400, "This complaint is already closed.")
+        db.add(Upvote(complaint_id=cid, user_id=user.id))
+    db.flush()
+    n = db.query(func.count(Upvote.id)).filter(Upvote.complaint_id == cid).scalar() or 0
+    if not existing and n >= VOTES_TO_ESCALATE and c.priority == "Medium":
+        c.priority = "High"
+        db.add(StatusHistory(complaint_id=cid, status=c.status, changed_by="System",
+                             note=f"Priority raised to High: {n + 1} people are affected"))
+    db.commit()
+    return {"votes": n, "voted": not existing, "priority": c.priority}
 
 
 @app.get("/ai-status")

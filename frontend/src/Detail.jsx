@@ -85,6 +85,7 @@ export default function ComplaintDrawer({ id, token, user, departments, onClose,
             <div><small>Department</small>{c.department}</div>
             <div><small>Location</small>{c.location || "-"}</div>
             <div><small>Submitted by</small>{c.submitted_by}</div>
+            <div><small>People affected</small>{(c.votes || 0) + 1}</div>
             <div><small>Raised</small>{fmt(c.created_at)}</div>
             <div><small>{c.resolved_at ? "Closed" : "Due by"}</small>{fmt(c.resolved_at || c.due_at)}</div>
             {user.role !== "user" && (
