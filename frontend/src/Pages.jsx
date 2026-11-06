@@ -414,6 +414,35 @@ function AiStatus({ token }) {
   );
 }
 
+// Super Admin only: sends one test email so you can see whether email is set up.
+function EmailStatus({ token }) {
+  const [to, setTo] = useState("");
+  const [r, setR] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const send = async (e) => {
+    e.preventDefault();
+    setBusy(true); setR(null);
+    try { setR(await api("/email-test", "POST", { to }, token)); }
+    catch (x) { setR({ sent: false, error: x.message }); }
+    setBusy(false);
+  };
+  return (
+    <div className="card">
+      <h3>Email notifications</h3>
+      <p className="muted">Students are emailed when a complaint is received, taken and resolved. Send yourself a test to check the setup.</p>
+      <form className="row-flex" onSubmit={send}>
+        <input type="email" required placeholder="your email address" value={to} onChange={(e) => setTo(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+        <button className="btn ghost sm" disabled={busy}>{busy ? "Sending..." : "Send test email"}</button>
+      </form>
+      {r && (
+        <div className={`alert ${r.sent ? "ok" : "err"}`} style={{ marginTop: 12 }}>
+          {r.sent ? "Sent. Check your inbox (and spam folder)." : `Email is not working: ${r.error || "unknown error"}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function StaffOverview({ auth, tick, go, onOpen }) {
   const [s, setS] = useState(null);
   const [items, setItems] = useState([]);
@@ -454,7 +483,7 @@ export function StaffOverview({ auth, tick, go, onOpen }) {
             <Stat icon="star" tone="amber" label={`Avg rating${s.rating_count ? ` (${s.rating_count})` : ""}`} value={s.avg_rating ?? "-"} />
           </div>
 
-          {isAdmin && <AiStatus token={auth.token} />}
+          {isAdmin && <div className="grid two"><AiStatus token={auth.token} /><EmailStatus token={auth.token} /></div>}
 
           <div className="grid two">
             <div className="card">

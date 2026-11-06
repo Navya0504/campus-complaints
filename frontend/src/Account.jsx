@@ -8,6 +8,7 @@ export default function AccountModal({ auth, onClose, onUpdated }) {
 
   const [name, setName] = useState(u.name);
   const [title, setTitle] = useState(u.title || "");
+  const [notify, setNotify] = useState(u.email_notify !== false);
   const [pErr, setPErr] = useState("");
   const [pOk, setPOk] = useState("");
   const [pBusy, setPBusy] = useState(false);
@@ -23,7 +24,7 @@ export default function AccountModal({ auth, onClose, onUpdated }) {
     e.preventDefault();
     setPErr(""); setPOk(""); setPBusy(true);
     try {
-      const body = { name };
+      const body = { name, email_notify: notify };
       if (isStaff) body.title = title;
       const user = await api("/auth/profile", "PATCH", body, auth.token);
       onUpdated(user);
@@ -74,6 +75,10 @@ export default function AccountModal({ auth, onClose, onUpdated }) {
               onChange={(e) => setTitle(e.target.value)} />
             <span className="hint">Your colleagues can see this on the Team page. Only you can change it.</span></div>
         )}
+        <label className="check">
+          <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+          <span>Email me about my complaints (received, taken, resolved)</span>
+        </label>
         {pErr && <div className="alert err">{pErr}</div>}
         {pOk && <div className="alert ok">{pOk}</div>}
         <button className="btn ghost" disabled={pBusy}>{pBusy ? "Saving..." : "Save details"}</button>

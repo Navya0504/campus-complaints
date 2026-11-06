@@ -344,3 +344,5 @@ tr.dim .t { font-weight: 500; }
 .similar p { margin: 4px 0 10px; }
 .sim-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #fde68a; }
 .sim-item .t { font-weight: 600; color: #1e293b; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: #334155; cursor: pointer; }
+.check input { margin-top: 3px; width: auto; }

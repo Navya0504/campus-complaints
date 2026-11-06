@@ -1,4 +1,4 @@
-import os, re, json
+import os, re, json, html, threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -11,7 +11,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, Field
 from sqlalchemy import (create_engine, text, inspect, String, Text, DateTime,
-                        ForeignKey, func)
+                        ForeignKey, Boolean, func)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 load_dotenv()
@@ -20,6 +20,11 @@ SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
+MAIL_FROM = os.getenv("MAIL_FROM", "")            # must be a sender you verified in Brevo
+MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "Campus Resolve")
+WEB_URL = os.getenv("WEB_URL", "").rstrip("/")   # your website address, used for the "open" link
+MAIL_SYNC = False                                 # tests set this so emails are sent immediately
 args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=args)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -49,6 +54,7 @@ class User(Base):
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), nullable=True)
     google_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     title: Mapped[str] = mapped_column(String(80), default="")  # job title shown to the department
+    email_notify: Mapped[Optional[bool]] = mapped_column(Boolean, default=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 class Department(Base):
@@ -166,6 +172,53 @@ def similarity(a, b):
     return max(len(shared) / len(a | b), 0.9 * len(shared) / min(len(a), len(b)))
 
 
+# ---------- email notifications (Brevo) ----------
+MAIL_STATE = {"error": ""}
+
+def send_email(to, subject, html_body):
+    """Sends one email through Brevo. Returns True/False and never raises."""
+    if not (BREVO_API_KEY and MAIL_FROM):
+        MAIL_STATE["error"] = "BREVO_API_KEY or MAIL_FROM is not set"
+        return False
+    try:
+        r = http.post("https://api.brevo.com/v3/smtp/email",
+                      headers={"api-key": BREVO_API_KEY, "Content-Type": "application/json", "accept": "application/json"},
+                      json={"sender": {"email": MAIL_FROM, "name": MAIL_FROM_NAME},
+                            "to": [{"email": to}], "subject": subject, "htmlContent": html_body},
+                      timeout=15)
+        if r.status_code not in (200, 201):
+            MAIL_STATE["error"] = f"Brevo returned {r.status_code}: {r.text[:200]}"
+            return False
+        MAIL_STATE["error"] = ""
+        return True
+    except Exception as e:
+        MAIL_STATE["error"] = f"{type(e).__name__}: {str(e)[:150]}"
+        return False
+
+def mail_html(heading, lines, c=None):
+    e = html.escape
+    body = "".join(f"<p style='margin:0 0 10px'>{e(x)}</p>" for x in lines)
+    card = ""
+    if c is not None:
+        card = (f"<div style='margin:14px 0;padding:12px 14px;border-radius:10px;background:#f1f5f9'>"
+                f"<b>{e(c.ticket_id or '')}</b><br>{e(c.title)}</div>")
+    link = f"<p><a href='{e(WEB_URL)}'>Open Campus Resolve</a></p>" if WEB_URL else ""
+    return (f"<div style='font-family:Arial,sans-serif;max-width:520px;color:#0f172a'>"
+            f"<h2 style='color:#1d4ed8'>{e(heading)}</h2>{body}{card}{link}"
+            f"<p style='color:#64748b;font-size:12px'>You get these emails because you use Campus Resolve. "
+            f"You can switch them off in My account.</p></div>")
+
+def notify(user, subject, heading, lines, c=None):
+    """Emails a user about their complaint, unless they switched emails off. Runs in the background."""
+    if not user or not user.email or user.email_notify is False:
+        return
+    to, body = user.email, mail_html(heading, lines, c)
+    if MAIL_SYNC:
+        send_email(to, subject, body)
+    else:
+        threading.Thread(target=send_email, args=(to, subject, body), daemon=True).start()
+
+
 # ---------- AI triage (Gemini) ----------
 RANK = {"Medium": 0, "High": 1, "Urgent": 2}
 AI_STATE = {"error": ""}
@@ -262,7 +315,7 @@ def user_out(u, db):
     return {"id": u.id, "name": u.name, "email": u.email, "role": u.role,
             "title": u.title or "",
             "department_id": u.department_id, "department": dep.name if dep else None,
-            "has_password": bool(u.password_hash)}
+            "has_password": bool(u.password_hash), "email_notify": u.email_notify is not False}
 
 def can_view(user, c):
     if user.role in ("admin", "staff"):
@@ -318,6 +371,7 @@ def migrate():
     add_column("complaints", "assigned_to_id", "INTEGER")
     add_column("complaints", "ai_summary", "TEXT")
     add_column("complaints", "triage", "VARCHAR(10)")
+    add_column("users", "email_notify", "BOOLEAN DEFAULT TRUE")
 
 migrate()
 
@@ -357,6 +411,10 @@ class GoogleIn(BaseModel):
 class ProfileIn(BaseModel):
     name: Optional[str] = None
     title: Optional[str] = None
+    email_notify: Optional[bool] = None
+
+class MailTestIn(BaseModel):
+    to: str
 
 class AssignIn(BaseModel):
     user_id: Optional[int] = None
@@ -540,6 +598,8 @@ def update_profile(body: ProfileIn, user=Depends(current_user), db=Depends(get_d
         if user.role != "staff":
             raise HTTPException(400, "Only department staff have a job title")
         user.title = body.title.strip()[:80]
+    if body.email_notify is not None:
+        user.email_notify = body.email_notify
     db.commit()
     return user_out(user, db)
 
@@ -611,6 +671,16 @@ def vote(cid: int, user=Depends(current_user), db=Depends(get_db)):
     return {"votes": n, "voted": not existing, "priority": c.priority}
 
 
+@app.post("/email-test")
+def email_test(body: MailTestIn, user=Depends(admin_only)):
+    """Super Admin only: sends one test email so you can see whether email is set up."""
+    to = body.to.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", to):
+        raise HTTPException(400, "Enter a valid email address")
+    ok = send_email(to, "Campus Resolve test email", mail_html("Email is working", ["This is a test from Campus Resolve."]))
+    return {"configured": bool(BREVO_API_KEY and MAIL_FROM), "sent": ok, "error": MAIL_STATE["error"]}
+
+
 @app.get("/ai-status")
 def ai_status(user=Depends(admin_only)):
     """Super Admin only: runs one live test so you can see whether Gemini is working."""
@@ -646,6 +716,9 @@ def create_complaint(body: ComplaintIn, user=Depends(current_user), db=Depends(g
     db.add(StatusHistory(complaint_id=c.id, status="Submitted",
                          note="Complaint submitted", changed_by=user.name))
     db.commit()
+    notify(user, f"We got your complaint {c.ticket_id}", "We received your complaint",
+           [f"Thanks, {user.name.split()[0]}. It has been sent to {dept_name}.",
+            f"We aim to resolve it by {(c.due_at + IST).strftime('%d %b %Y, %I:%M %p')}."], c)
     return out(c, db, True, user)
 
 @app.get("/complaints")
@@ -696,6 +769,15 @@ def update_status(cid: int, body: StatusIn, user=Depends(staff_only), db=Depends
     c.resolved_at = now() if status in ("Resolved", "Rejected") else None
     db.add(StatusHistory(complaint_id=c.id, status=status, note=note, changed_by=user.name))
     db.commit()
+    owner = db.get(User, c.user_id)
+    extra = [f"Note from {user.name}: {note}"] if note else []
+    if status == "Resolved":
+        notify(owner, f"Resolved: {c.ticket_id}", "Your complaint was resolved",
+               ["Please open the app and rate how it went. It takes a few seconds."] + extra, c)
+    elif status == "Rejected":
+        notify(owner, f"Update on {c.ticket_id}", "Your complaint was closed", extra, c)
+    else:
+        notify(owner, f"Update on {c.ticket_id}", f"Status: {status}", extra, c)
     return out(c, db, True, user)
 
 @app.post("/complaints/{cid}/claim")
@@ -719,6 +801,9 @@ def claim_complaint(cid: int, user=Depends(staff_only), db=Depends(get_db)):
         db.add(StatusHistory(complaint_id=c.id, status="In Progress",
                              note=f"Taken by {user.name}", changed_by=user.name))
         db.commit()
+        dept = db.get(Department, c.department_id)
+        notify(db.get(User, c.user_id), f"{c.ticket_id} is being handled", "Someone is working on it",
+               [f"{user.name} from {dept.name if dept else 'the department'} has taken your complaint."], c)
     return out(c, db, True, user)
 
 @app.post("/complaints/{cid}/release")
@@ -758,6 +843,11 @@ def assign_complaint(cid: int, body: AssignIn, admin=Depends(admin_only), db=Dep
             c.status = "In Progress"
         db.add(StatusHistory(complaint_id=c.id, status=c.status,
                              note=f"Assigned to {u.name} by {admin.name}", changed_by=admin.name))
+        db.commit()
+        notify(db.get(User, c.user_id), f"{c.ticket_id} is being handled", "Someone is working on it",
+               [f"{u.name} has been assigned to your complaint."], c)
+        notify(u, f"New complaint assigned: {c.ticket_id}", "A complaint was assigned to you",
+               [f"{admin.name} assigned this complaint to you. Please update its status as you work on it."], c)
     db.commit()
     return out(c, db, True, admin)
 
